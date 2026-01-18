@@ -29,6 +29,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
     int CatgID = 0;
     private SignInScene s;
     private BorderPane root;
+    int gg;
 
     // Tables
     private TableView<ProductRow> Ptable;
