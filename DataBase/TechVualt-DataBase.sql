@@ -71,7 +71,6 @@ CREATE TABLE Category (
                           Description TEXT,
                           ImagePath   VARCHAR(255)
 );
-
 SELECT ProdModel, Price, p.Description, p.ImagePath, Rate FROM Product p join Category c WHERE Rate = 5 AND c.CatgId = p.CatgID AND c.isActive='ACTIVE';
 
 
@@ -107,42 +106,9 @@ CREATE TABLE Product (
 );
 
 
-
--- ======================================
--- 5) SUPPLIER / SUPPLY
--- ======================================
-CREATE TABLE Supplier (
-                          SupID   INT AUTO_INCREMENT PRIMARY KEY,
-                          SupName VARCHAR(100) NOT NULL,
-                          Phone   VARCHAR(20)
-);
-
-CREATE TABLE Supply (
-                        SupplyID   INT AUTO_INCREMENT PRIMARY KEY,
-                        SupID      INT NOT NULL,
-                        ProdID     INT NOT NULL,
-                        SupplyDate DATE NOT NULL,
-                        Price      DECIMAL(10,2) NOT NULL,
-                        Quantity   INT NOT NULL,
-
-                        CONSTRAINT fk_supply_supplier
-                            FOREIGN KEY (SupID) REFERENCES Supplier(SupID)
-                                ON DELETE CASCADE ON UPDATE CASCADE,
-
-                        CONSTRAINT fk_supply_product
-                            FOREIGN KEY (ProdID) REFERENCES Product(ProdID)
-                                ON DELETE CASCADE ON UPDATE CASCADE
-);
-
 -- ======================================
 -- 6) DELIVERY / BILL / ORDERS
 -- ======================================
-CREATE TABLE Delivery (
-                          DeliveryID   INT AUTO_INCREMENT PRIMARY KEY,
-                          DeliveryName VARCHAR(100) NOT NULL,
-                          Location     VARCHAR(100),
-                          Phone        VARCHAR(20)
-);
 
 CREATE TABLE Bill (
                       BillID      INT AUTO_INCREMENT PRIMARY KEY,
@@ -165,7 +131,6 @@ CREATE TABLE Orders (
                         Quantity    INT NOT NULL,
                         UnitPrice   DECIMAL(10,2) NOT NULL,
                         Status      BOOLEAN NOT NULL DEFAULT TRUE,
-                        Items       VARCHAR(1000),
 
                         CONSTRAINT fk_orders_bill
                             FOREIGN KEY (BillID) REFERENCES Bill(BillID)
@@ -230,29 +195,6 @@ INSERT INTO Product(ProdModel, Rate, Price, Quantity, CatgID, InvID, Description
 
 
 
-
-
-INSERT INTO Supplier(SupName, Phone) VALUES
-                                         ('TechSupplier Co.','0591111111'),
-                                         ('GigaParts','0592222222');
-
--- اعرف IDs
-SELECT * FROM Supplier;
-SELECT * FROM Product;
-
--- مثال: افترض SupplierID: 1,2
--- وافترض ProdID انولدوا: 1..4
-INSERT INTO Supply(SupID, ProdID, SupplyDate, Price, Quantity) VALUES
-                                                                   (1,2,'2025-11-15',800.00,50),
-                                                                   (2,1,'2025-10-20',1100.00,20),
-                                                                   (2,4,'2025-12-05',240.00,40);
-
-INSERT INTO Delivery(DeliveryName, Location, Phone) VALUES
-                                                        ('Fast Delivery','Ramallah','0593333333'),
-                                                        ('City Express','Nablus','0594444444');
-
-SELECT * FROM Delivery;
-
 -- Bills (AutoIncrement)
 INSERT INTO Bill(BillDate, CustID, TotalAmount) VALUES
                                                     ('2025-12-18 12:00:00',3,0.00),
@@ -282,20 +224,8 @@ SELECT * FROM Users;
 SELECT * FROM Category;
 SELECT * FROM Inventory;
 SELECT * FROM Product;
-SELECT * FROM Supplier;
-SELECT * FROM Supply;
-SELECT * FROM Delivery;
 SELECT * FROM Bill;
 SELECT * FROM Orders;
-
-SELECT * FROM Users u JOIN Employee e ON e.EmpID = u.PersonID WHERE u.UserID = ?;
-
-SELECT FirstName, SecondName,UserName,Password, Phone, Email FROM Users u JOIN Person p ON UserID = p.PersonID WHERE UserID = ?;
-
-
-select ProdModel , o.Quantity
-from Orders o join product p on o.ProdID = p.ProdID
-where o.BillID=22;
 
 -- RAM Products (from your images)
 INSERT INTO Product
@@ -351,6 +281,7 @@ VALUES
 -- ===============================
 -- Power Supply Products (8 items)
 -- ===============================
+
 INSERT INTO Product
 (ProdModel, Rate, Price, Quantity, CatgID, InvID, Description, ImagePath)
 VALUES
