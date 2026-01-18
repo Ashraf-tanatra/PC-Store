@@ -56,10 +56,13 @@ public class EmployeScene implements EventHandler<ActionEvent> {
     String empName = "";
     String empRole = "";
 
+
+    HBox btnRow;
+
     // Users fields
-    private TextField tfUserID_U, tfUserName_U, tfphone, tfEmail_U, tfUserNameLogin_U;
+    private TextField tfUserID_U, tfUserName_U, tfphone, tfEmail_U, tfUserNameLogin_U ,tfSalary ;
     private PasswordField pfPass_U;
-    private ComboBox<String> cbRole_U, cbStatus_U, cbGender_U;
+    private ComboBox<String> cbRole_U, cbStatus_U, cbGender_U,cbIsActive;
 
     // Dash Board Buttons
     Button maxSalaryBtn, empBySalaryBtn, lowStockBtn, lastRestockBtn,
@@ -585,6 +588,22 @@ public class EmployeScene implements EventHandler<ActionEvent> {
             cbRole_U.setValue(row.getRole());
             cbStatus_U.setValue(row.getStatus());
             tfEmail_U.setText(row.getEmail() == null ? "" : row.getEmail());
+            if(cbRole_U.getValue().equals("Admin") || cbRole_U.getValue().equals("EMP")){
+                String sql= "SELECT * FROM Users u JOIN Employee e ON e.EmpID = u.PersonID WHERE u.UserID = ?";
+                try (Connection conn = s.m.conn.connectDB();
+                     PreparedStatement ps = conn.prepareStatement(sql);) {
+                    ps.setInt(1, row.getUserID());
+                    ResultSet rs = ps.executeQuery();
+                    double salary=rs.getDouble("Salary");
+                    card.getChildren().addAll(t, tfUserID_U, tfUserName_U, tfphone, cbGender_U, tfUserNameLogin_U, tfEmail_U, pfPass_U, cbRole_U, cbStatus_U, btnRow );
+                } catch (SQLException e) {
+                    throw new RuntimeException(e);
+                } catch (ClassNotFoundException e) {
+                    throw new RuntimeException(e);
+                }
+
+
+            }
         });
 
         Utable.setStyle(
@@ -612,12 +631,11 @@ public class EmployeScene implements EventHandler<ActionEvent> {
 
         tfUserID_U = styledTF("User ID (Auto)");
         tfUserID_U.setEditable(false);
-
+        tfSalary=styledTF("Salary");
         tfUserName_U = styledTF("Full Name (First Last)");
         tfphone = styledTF("Phone");
         tfUserNameLogin_U = styledTF("Username (Login)");
         tfEmail_U = styledTF("Email");
-
         pfPass_U = new PasswordField();
         pfPass_U.setPromptText("Password");
         pfPass_U.setPrefHeight(42);
@@ -651,12 +669,16 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         styleCombo(cbGender_U);
         styleCombo(cbStatus_U);
 
-        HBox btnRow = new HBox(10);
+        btnRow = new HBox(10);
         btnRow.setAlignment(Pos.CENTER);
 
         Button addBtn = new Button("➕ Add");
         styleGreenButton(addBtn);
         addBtn.setOnAction(e -> addUser());
+
+        Button deleteUser=new Button("Delete");
+        styleGreenButton(deleteUser);
+        deleteUser.setOnAction(e -> deleteUser());
 
         Button updateBtn = new Button("✏ Update");
         styleGreenButton(updateBtn);
@@ -669,16 +691,9 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         styleGreenButton(clearBtn);
         clearBtn.setOnAction(e -> clearUserForm());
 
-        btnRow.getChildren().addAll(addBtn, updateBtn, clearBtn);
+        btnRow.getChildren().addAll(addBtn, updateBtn, clearBtn ,deleteUser);
 
-        card.getChildren().addAll(
-                t,
-                tfUserID_U,
-                tfUserName_U, tfphone, cbGender_U,
-                tfUserNameLogin_U, tfEmail_U,
-                pfPass_U, cbRole_U, cbStatus_U,
-                btnRow
-        );
+        card.getChildren().addAll(t, tfUserID_U, tfUserName_U, tfphone, cbGender_U, tfUserNameLogin_U, tfEmail_U, pfPass_U, cbRole_U, cbStatus_U, btnRow );
 
         TranslateTransition tt = new TranslateTransition(Duration.millis(400), card);
         tt.setFromY(18);
@@ -686,6 +701,74 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         tt.play();
 
         return card;
+    }
+    private void deleteUser() {
+        Integer userId = parseInt(tfUserID_U.getText());
+        if (userId == null) {
+            setMsg("Select User ❗", true);
+            return;
+        }
+
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION,
+                "Delete this user permanently?\n(This will remove Person + User + Employee/Customer rows if exist)",
+                ButtonType.YES, ButtonType.NO);
+        confirm.showAndWait();
+        if (confirm.getResult() != ButtonType.YES) return;
+
+        Connection conn = null;
+        try {
+            conn = s.m.conn.connectDB();
+            conn.setAutoCommit(false);
+
+            // 1) get PersonID
+            Integer personId = null;
+            try (PreparedStatement ps = conn.prepareStatement("SELECT PersonID FROM Users WHERE UserID=?")) {
+                ps.setInt(1, userId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) personId = rs.getInt(1);
+                }
+            }
+
+            if (personId == null) {
+                setMsg("User not found ❗", true);
+                conn.rollback();
+                return;
+            }
+
+            // 2) delete role rows first (safe)
+            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM Employee WHERE EmpID=?")) {
+                ps.setInt(1, personId);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM Customer WHERE CustID=?")) {
+                ps.setInt(1, personId);
+                ps.executeUpdate();
+            }
+
+            // 3) delete from Users
+            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM Users WHERE UserID=?")) {
+                ps.setInt(1, userId);
+                ps.executeUpdate();
+            }
+
+            // 4) delete from Person
+            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM Person WHERE PersonID=?")) {
+                ps.setInt(1, personId);
+                ps.executeUpdate();
+            }
+
+            conn.commit();
+            setMsg("User deleted ✅", false);
+            loadUsers();
+            clearUserForm();
+
+        } catch (Exception e) {
+            try { if (conn != null) conn.rollback(); } catch (Exception ignore) {}
+            e.printStackTrace();
+            setMsg("Delete failed: " + e.getMessage(), true);
+        } finally {
+            try { if (conn != null) conn.close(); } catch (Exception ignore) {}
+        }
     }
 
     private void addUser() {
@@ -716,7 +799,6 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         String role = cbRole_U.getValue();
         String status = cbStatus_U.getValue();
         boolean active = "Active".equalsIgnoreCase(status);
-
         String email = tfEmail_U.getText().trim();
 
         if (userNameLogin.isEmpty() || pass.isEmpty() || role == null || status == null) {
@@ -725,13 +807,16 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         }
 
         String sqlPerson = "INSERT INTO Person(FirstName, SecondName, Gender, Phone) VALUES (?,?,?,?)";
-        String sqlUser = "INSERT INTO Users(PersonID, UserName, Password, Role, ActiveStatus, Email) VALUES (?,?,?,?,?,?)";
+        String sqlUser   = "INSERT INTO Users(PersonID, UserName, Password, Role, ActiveStatus, Email) VALUES (?,?,?,?,?,?)";
+        String sqlEmp    = "INSERT INTO Employee(EmpID, Salary, Address) VALUES (?, ?, ?)";
+        String sqlCust   = "INSERT INTO Customer(CustID, LastPurchaseDate) VALUES (?, NULL)";
 
         try (Connection conn = s.m.conn.connectDB()) {
             conn.setAutoCommit(false);
 
             int personId;
 
+            // 1) insert person
             try (PreparedStatement psPerson = conn.prepareStatement(sqlPerson, Statement.RETURN_GENERATED_KEYS)) {
                 psPerson.setString(1, firstName);
                 psPerson.setString(2, lastName);
@@ -745,17 +830,40 @@ public class EmployeScene implements EventHandler<ActionEvent> {
                 }
             }
 
+            // 2) insert users
             try (PreparedStatement psUser = conn.prepareStatement(sqlUser)) {
                 psUser.setInt(1, personId);
                 psUser.setString(2, userNameLogin);
                 psUser.setString(3, pass);
                 psUser.setString(4, role);
                 psUser.setBoolean(5, active);
+
                 if (email.isEmpty()) psUser.setNull(6, Types.VARCHAR);
                 else psUser.setString(6, email);
 
                 psUser.executeUpdate();
             }
+
+            // 3) insert into role-table
+            if ("EMP".equalsIgnoreCase(role)) {
+                // (اختياري) خليه افتراضي مؤقت
+                double defaultSalary = 0.0;
+                String defaultAddress = null;
+
+                try (PreparedStatement psEmp = conn.prepareStatement(sqlEmp)) {
+                    psEmp.setInt(1, personId);
+                    psEmp.setDouble(2, defaultSalary);
+                    psEmp.setString(3, defaultAddress);
+                    psEmp.executeUpdate();
+                }
+
+            } else if ("CUST".equalsIgnoreCase(role)) {
+                try (PreparedStatement psCust = conn.prepareStatement(sqlCust)) {
+                    psCust.setInt(1, personId);
+                    psCust.executeUpdate();
+                }
+            }
+            // ADMIN: لا شيء إضافي (أو اعتبره EMP إذا بدك)
 
             conn.commit();
             setMsg("User added ✅", false);
@@ -765,9 +873,11 @@ public class EmployeScene implements EventHandler<ActionEvent> {
 
         } catch (SQLIntegrityConstraintViolationException e) {
             setMsg("Duplicate (phone/username/email) ❗", true);
+            try { s.m.conn.connectDB().rollback(); } catch (Exception ignore) {}
         } catch (Exception e) {
             e.printStackTrace();
             setMsg("Add failed: " + e.getMessage(), true);
+            try { s.m.conn.connectDB().rollback(); } catch (Exception ignore) {}
         }
     }
 
@@ -903,8 +1013,9 @@ public class EmployeScene implements EventHandler<ActionEvent> {
             if (row == null) return;
             tfCatgID_C.setText(String.valueOf(row.getCatgID()));
             tfCatgName_C.setText(row.getCatgName());
-            taCatgDesc_C.setText(row.getDescription() == null ? "" : row.getDescription());
-            tfCatgImagePath_C.setText(row.getImagePath() == null ? "" : row.getImagePath());
+            taCatgDesc_C.setText(row.getDescription() );
+            tfCatgImagePath_C.setText(row.getImagePath() );
+            cbIsActive.setPromptText(row.getIsActive());
         });
 
         actionCol.setCellFactory(col -> new TableCell<>() {
@@ -959,6 +1070,13 @@ public class EmployeScene implements EventHandler<ActionEvent> {
                         "-fx-border-radius: 10; -fx-background-radius: 10;"
         );
 
+        cbIsActive=new ComboBox<>();
+        cbIsActive.setPromptText("Activation");
+        cbIsActive.setPrefHeight(42);
+        cbIsActive.getItems().addAll("ACTIVE", "NOT ACTIVE");
+
+        styleCombo(cbIsActive);
+
         tfCatgImagePath_C = styledTF("Image Path");
         Button chooseCatgImg = new Button("📁 Choose Image");
         styleGreenButton(chooseCatgImg);
@@ -986,6 +1104,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
                 tfCatgID_C,
                 tfCatgName_C,
                 taCatgDesc_C,
+                cbIsActive,
                 tfCatgImagePath_C, chooseCatgImg,
                 btnRow
         );
@@ -1118,6 +1237,9 @@ public class EmployeScene implements EventHandler<ActionEvent> {
             updateProduct();
             loadProducts(CatgID);
         });
+        Button deleteProduct=new Button("Delete");
+        styleGreenButton(deleteProduct);
+        deleteProduct.setOnAction(e -> deleteProduct());
 
         Button clearBtn = new Button("🧹 Clear");
         styleGreenButton(clearBtn);
@@ -1173,7 +1295,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
     }
 
     private void loadCategorys() {
-        String sql = "SELECT CatgID, CatgName, Description, ImagePath FROM Category";
+        String sql = "SELECT CatgID, CatgName, Description, ImagePath , isActive FROM Category";
         Cdata.clear();
 
         try (Connection conn = s.m.conn.connectDB();
@@ -1185,7 +1307,8 @@ public class EmployeScene implements EventHandler<ActionEvent> {
                         rs.getInt("CatgID"),
                         rs.getString("CatgName"),
                         rs.getString("Description"),
-                        rs.getString("ImagePath")
+                        rs.getString("ImagePath"),
+                        rs.getString("isActive")
                 ));
             }
             setMsg("Loaded " + Cdata.size() + " items ✅", false);
@@ -1235,6 +1358,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         Integer id = parseInt(tfCatgID_C.getText());
         String name = tfCatgName_C.getText().trim();
         String desc = taCatgDesc_C.getText().trim();
+        String isActive=cbIsActive.getValue().trim();
 
         if (id == null || name.isEmpty()) {
             setMsg("Category ID & Name required ❗", true);
@@ -1246,7 +1370,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
             String savedPath = copyToProjectImages(tfCatgImagePath_C.getText());
             tfCatgImagePath_C.setText(savedPath == null ? "" : savedPath);
 
-            String sql = "INSERT INTO Category (CatgID, CatgName, Description, ImagePath) VALUES (?, ?, ?, ?)";
+            String sql = "INSERT INTO Category (CatgID, CatgName, Description, ImagePath ,isActive) VALUES (?, ?, ?, ?,?)";
 
             try (Connection conn = s.m.conn.connectDB();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -1255,6 +1379,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
                 ps.setString(2, name);
                 ps.setString(3, desc.isEmpty() ? null : desc);
                 ps.setString(4, savedPath);
+                ps.setBoolean(5, isActive.isEmpty());
 
                 ps.executeUpdate();
                 setMsg("Category added ✅", false);
@@ -1270,10 +1395,13 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         }
     }
 
+
     private void updateCategory() {
         Integer id = parseInt(tfCatgID_C.getText());
         String name = tfCatgName_C.getText().trim();
         String desc = taCatgDesc_C.getText().trim();
+        String isActive= cbIsActive.getValue().trim();
+
 
         if (id == null || name.isEmpty()) {
             setMsg("Select category & fill fields ❗", true);
@@ -1287,7 +1415,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
             if (savedPath != null) img = savedPath;
             tfCatgImagePath_C.setText(img);
 
-            String sql = "UPDATE Category SET CatgName=?, Description=?, ImagePath=? WHERE CatgID=?";
+            String sql = "UPDATE Category SET CatgName=?, Description=?, ImagePath=? ,isActive=? WHERE CatgID=?";
 
             try (Connection conn = s.m.conn.connectDB();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -1295,7 +1423,8 @@ public class EmployeScene implements EventHandler<ActionEvent> {
                 ps.setString(1, name);
                 ps.setString(2, desc.isEmpty() ? null : desc);
                 ps.setString(3, img.isEmpty() ? null : img);
-                ps.setInt(4, id);
+                ps.setInt(5, id);
+                ps.setString(4, isActive);
 
                 int updated = ps.executeUpdate();
                 if (updated == 0) setMsg("Category not found ❗", true);
@@ -1319,6 +1448,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         tfCatgName_C.clear();
         taCatgDesc_C.clear();
         tfCatgImagePath_C.clear();
+        cbIsActive.setValue("ACTIVE");
         if (Ctable != null) Ctable.getSelectionModel().clearSelection();
         setMsg("", false);
     }
@@ -1389,6 +1519,68 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         } catch (Exception e) {
             e.printStackTrace();
             setMsg("Add failed: " + e.getMessage(), true);
+        }
+    }
+
+    private void deleteProduct() {
+        Integer id = parseInt(tfProdID.getText());
+        if (id == null) {
+            setMsg("Select product to delete ❗", true);
+            return;
+        }
+
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION,
+                "Delete product permanently?\nIf product has orders, delete is blocked.",
+                ButtonType.YES, ButtonType.NO);
+        confirm.showAndWait();
+        if (confirm.getResult() != ButtonType.YES) return;
+
+        Connection conn = null;
+        try {
+            conn = s.m.conn.connectDB();
+            conn.setAutoCommit(false);
+
+            // block if orders exist
+            try (PreparedStatement ps = conn.prepareStatement("SELECT COUNT(*) FROM Orders WHERE ProdID=?")) {
+                ps.setInt(1, id);
+                try (ResultSet rs = ps.executeQuery()) {
+                    rs.next();
+                    if (rs.getInt(1) > 0) {
+                        setMsg("Can't delete: product has orders ❗", true);
+                        conn.rollback();
+                        return;
+                    }
+                }
+            }
+
+            // delete supply first
+            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM Supply WHERE ProdID=?")) {
+                ps.setInt(1, id);
+                ps.executeUpdate();
+            }
+
+            // delete product
+            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM Product WHERE ProdID=?")) {
+                ps.setInt(1, id);
+                int d = ps.executeUpdate();
+                if (d == 0) {
+                    setMsg("Product not found ❗", true);
+                    conn.rollback();
+                    return;
+                }
+            }
+
+            conn.commit();
+            setMsg("Product deleted ✅", false);
+            loadProducts(CatgID);
+            clearForm();
+
+        } catch (Exception e) {
+            try { if (conn != null) conn.rollback(); } catch (Exception ignore) {}
+            e.printStackTrace();
+            setMsg("Delete failed: " + e.getMessage(), true);
+        } finally {
+            try { if (conn != null) conn.close(); } catch (Exception ignore) {}
         }
     }
 
@@ -1532,6 +1724,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
     private void styleCombo(ComboBox<String> cb) {
         cb.setStyle("-fx-background-color: rgba(26, 46, 26, 0.8);" +
                 "-fx-border-color: rgba(74, 222, 128, 0.35);" +
+                "-fx-prompt-text-fill: #e0e0e0;" +
                 "-fx-border-width: 2; -fx-border-radius: 10; -fx-background-radius: 10;" +
                 "-fx-text-fill: #e0e0e0;");
     }
@@ -1632,8 +1825,9 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         private String catgName;
         private String description;
         private String imagePath;
+        private String isActive;
 
-        public CategoryRow(int catgID, String catgName, String description, String imagePath) {
+        public CategoryRow(int catgID, String catgName, String description, String imagePath, String isActive) {
             this.catgID = catgID;
             this.catgName = catgName;
             this.description = description;
@@ -1641,16 +1835,13 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         }
 
         public int getCatgID() { return catgID; }
-        public void setCatgID(int catgID) { this.catgID = catgID; }
-
         public String getCatgName() { return catgName; }
-        public void setCatgName(String catgName) { this.catgName = catgName; }
-
         public String getDescription() { return description; }
-        public void setDescription(String description) { this.description = description; }
-
         public String getImagePath() { return imagePath; }
-        public void setImagePath(String imagePath) { this.imagePath = imagePath; }
+        public String getIsActive() { return isActive; }
+
+
+
     }
 
     public static class UserRow {

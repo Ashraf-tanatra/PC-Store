@@ -323,45 +323,45 @@ public class MainScene implements EventHandler<ActionEvent> {
         categories.setVgap(20);
         categories.setAlignment(Pos.CENTER);
 
-        String sql = "SELECT CatgID, CatgName, ImagePath FROM Category";
+        String sql = "SELECT CatgID, CatgName, ImagePath FROM Category WHERE isActive = ?";
+        String isActive = "ACTIVE";
 
         try (Connection conn = m.m.conn.connectDB();
-             PreparedStatement ps = conn.prepareStatement(sql);
-             ResultSet rs = ps.executeQuery()) {
+             PreparedStatement ps = conn.prepareStatement(sql);) {
+            ps.setString(1,isActive);
+            try(ResultSet rs = ps.executeQuery();){
+                int col = 0;
+                int row = 0;
 
-            int col = 0;
-            int row = 0;
+                while (rs.next()) {
+                    String name = rs.getString("CatgName");
+                    String id = rs.getString("CatgID");
+                    String imgPath = rs.getString("ImagePath");
 
-            while (rs.next()) {
-                String name = rs.getString("CatgName");
-                String id = rs.getString("CatgID");
-                String imgPath = rs.getString("ImagePath");
+                    String url = resolveImageUrl(imgPath);
+                    if (url == null) {
+                        System.out.println("Image NOT found: " + imgPath + " for " + name);
+                        continue;
+                    }
 
-                String url = resolveImageUrl(imgPath);
-                if (url == null) {
-                    System.out.println("Image NOT found: " + imgPath + " for " + name);
-                    continue;
+                    ImageView iv = new ImageView(new Image(url));
+                    iv.setFitWidth(150);
+                    iv.setFitHeight(150);
+                    iv.setPreserveRatio(true);
+
+                    VBox categoryCard = createCategoryCard(iv, name);
+                    ProductHandler ph=new ProductHandler(this,Integer.valueOf(id),name);
+                    categoryCard.setOnMouseClicked(ph);
+                    categories.add(categoryCard, col, row);
+                    row++;
+                    if (row == 2) { // 3 columns
+                        row = 0;
+                        col++;
+                    }
                 }
-
-                ImageView iv = new ImageView(new Image(url));
-                iv.setFitWidth(150);
-                iv.setFitHeight(150);
-                iv.setPreserveRatio(true);
-
-                VBox categoryCard = createCategoryCard(iv, name);
-                ProductHandler ph=new ProductHandler(this,Integer.valueOf(id),name);
-                categoryCard.setOnMouseClicked(ph);
-                categories.add(categoryCard, col, row);
-
-
-
-                row++;
-                if (row == 2) { // 3 columns
-                    row = 0;
-                    col++;
-                }
+            }catch (Exception e) {
+                e.printStackTrace();
             }
-
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -424,7 +424,7 @@ public class MainScene implements EventHandler<ActionEvent> {
         productsGrid.setVgap(20);
         productsGrid.setAlignment(Pos.CENTER);
 
-        String sql = "SELECT ProdModel, Price, Description, ImagePath, Rate FROM Product WHERE Rate = 5";
+        String sql = "SELECT ProdModel, Price, p.Description, p.ImagePath, Rate FROM Product p join Category c WHERE Rate = 5 AND c.CatgId = p.CatgID AND c.isActive='ACTIVE' ";
 
         int col = 0, row = 0;
 

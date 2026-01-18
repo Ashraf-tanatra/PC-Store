@@ -421,9 +421,10 @@ public class SignInScene implements EventHandler<ActionEvent> {
     private void handleSignUp() {
         String name1 = suName1.getText().trim();
         String name2 = suName2.getText().trim();
-        String username = suEmail.getText().trim(); // نخزنه كـ UserName
-        String gen = gender.getValue().trim();
+        String username = suEmail.getText().trim();
         String ph = phone.getText().trim();
+
+        String gen = (gender.getValue() == null) ? null : gender.getValue().trim();
 
         String pass = suPassword.getText();
         String conf = suConfirm.getText();
@@ -442,6 +443,7 @@ public class SignInScene implements EventHandler<ActionEvent> {
         String check = "SELECT 1 FROM Users WHERE UserName = ? LIMIT 1";
         String insPerson = "INSERT INTO Person(FirstName, SecondName, Gender, Phone) VALUES (?, ?, ?, ?)";
         String insUser = "INSERT INTO Users(PersonID, UserName, Password, Role, ActiveStatus) VALUES (?, ?, ?, 'CUST', TRUE)";
+        String insCust = "INSERT INTO Customer(CustID, LastPurchaseDate) VALUES (?, NULL)";
 
         try (Connection conn = m.conn.connectDB()) {
             conn.setAutoCommit(false);
@@ -463,8 +465,13 @@ public class SignInScene implements EventHandler<ActionEvent> {
             try (PreparedStatement ps = conn.prepareStatement(insPerson, Statement.RETURN_GENERATED_KEYS)) {
                 ps.setString(1, name1);
                 ps.setString(2, name2);
-                ps.setString(3, gen.isEmpty() ? null : gen);
-                ps.setString(4, ph.isEmpty() ? null : ph);
+
+                if (gen == null || gen.isEmpty()) ps.setNull(3, Types.VARCHAR);
+                else ps.setString(3, gen);
+
+                if (ph.isEmpty()) ps.setNull(4, Types.VARCHAR);
+                else ps.setString(4, ph);
+
                 ps.executeUpdate();
 
                 try (ResultSet keys = ps.getGeneratedKeys()) {
@@ -485,6 +492,12 @@ public class SignInScene implements EventHandler<ActionEvent> {
                 ps.executeUpdate();
             }
 
+            // 4) insert customer (IMPORTANT ✅)
+            try (PreparedStatement ps = conn.prepareStatement(insCust)) {
+                ps.setInt(1, newPersonId);
+                ps.executeUpdate();
+            }
+
             conn.commit();
             conn.setAutoCommit(true);
 
@@ -494,15 +507,15 @@ public class SignInScene implements EventHandler<ActionEvent> {
             suName1.clear();
             suName2.clear();
             suEmail.clear();
-            gender.getItems().clear();
             phone.clear();
+            gender.setValue(null); // ✅ مش clear items
             suPassword.clear();
             suConfirm.clear();
 
-            // go to sign in
             switchToSignIn();
 
         } catch (Exception e) {
+            try { m.conn.connectDB().rollback(); } catch (Exception ignore) {}
             e.printStackTrace();
             showMessage("DB Error: " + e.getMessage(), true);
         }
