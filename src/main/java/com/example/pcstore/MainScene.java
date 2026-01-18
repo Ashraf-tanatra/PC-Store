@@ -1,6 +1,7 @@
 package com.example.pcstore;
 
-import javafx.animation.*;
+import javafx.animation.TranslateTransition;
+import javafx.beans.property.SimpleDoubleProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
@@ -22,9 +23,6 @@ import java.io.File;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 
 public class MainScene implements EventHandler<ActionEvent> {
@@ -33,24 +31,21 @@ public class MainScene implements EventHandler<ActionEvent> {
     private int cartCount = 0;
 
     private int activeBillId = -1;
-     int custId = -1;
+    int custId = -1;
 
-    // ✅ FIX: must be field and used everywhere
     private Label cartLabel;
-
     private TextField searchField;
 
     // Cart List
-    ArrayList<CartItem> items=new  ArrayList<CartItem>();
-    int countItems=0;
+    ArrayList<CartItem> items = new ArrayList<>();
     Label totalLbl;
-
+    VBox mainContent;
     SignInScene m;
+
     public MainScene(SignInScene root) {
         m = root;
         this.custId = root.currentCustId;
     }
-
 
     @Override
     public void handle(ActionEvent actionEvent) {
@@ -65,7 +60,7 @@ public class MainScene implements EventHandler<ActionEvent> {
         scrollPane.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
         scrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
 
-        VBox mainContent = new VBox(30);
+        mainContent = new VBox(30);
         mainContent.setPadding(new Insets(20));
         mainContent.getChildren().addAll(
                 createHeroSection(),
@@ -75,6 +70,7 @@ public class MainScene implements EventHandler<ActionEvent> {
 
         scrollPane.setContent(mainContent);
         root.setCenter(scrollPane);
+
         m.m.root.setCenter(root);
         refreshCartLabelFromState();
     }
@@ -101,23 +97,22 @@ public class MainScene implements EventHandler<ActionEvent> {
         Label supports = LabelForm("Supports");
         Label profile = LabelForm("Profile");
 
-        SupportHandler supp=new SupportHandler(this);
+        SupportHandler supp = new SupportHandler(this);
         supports.setOnMouseClicked(supp);
 
         home.setOnMouseClicked(e -> {
             m.m.root.getChildren().clear();
             handle(null);
         });
-        ProfileHandler pf=new ProfileHandler(this);
+
+        ProfileHandler pf = new ProfileHandler(this);
         profile.setOnMouseClicked(pf);
 
-        parts.getChildren().addAll(home, bills, profile,supports);
+        parts.getChildren().addAll(home, bills, profile, supports);
 
-        BillsHandler b=new BillsHandler(this);
+        BillsHandler b = new BillsHandler(this);
         bills.setOnMouseClicked(b);
 
-
-        // ✅ FIX: use field cartLabel (do NOT shadow it)
         this.cartLabel = new Label("🛒 Cart (0)");
         Button cartBtn = new Button();
         cartBtn.setGraphic(this.cartLabel);
@@ -132,9 +127,7 @@ public class MainScene implements EventHandler<ActionEvent> {
                         "-fx-font-weight: bold; -fx-padding: 10 20; -fx-background-radius: 8;"));
         cartBtn.setPrefHeight(40);
         cartBtn.setPrefWidth(130);
-        cartBtn.setOnAction(e->{
-            openCart();
-        });
+        cartBtn.setOnAction(e -> openCart());
 
         Button signOutBtn = new Button("⎋ Sign Out");
         signOutBtn.setPrefHeight(40);
@@ -180,7 +173,7 @@ public class MainScene implements EventHandler<ActionEvent> {
         return header;
     }
 
-    public Label LabelForm(String s){
+    public Label LabelForm(String s) {
         Label t = new Label(s);
         t.setTextFill(Color.web("#a3e635"));
         t.setFont(Font.font("System", FontWeight.SEMI_BOLD, 14));
@@ -196,7 +189,6 @@ public class MainScene implements EventHandler<ActionEvent> {
     }
 
     public void addToCart(int prodId) {
-
         String sql = "SELECT ProdModel, Price, Quantity FROM Product WHERE ProdID=? LIMIT 1";
 
         try (Connection conn = m.m.conn.connectDB();
@@ -214,27 +206,23 @@ public class MainScene implements EventHandler<ActionEvent> {
                 double price = rs.getDouble("Price");
                 int stock = rs.getInt("Quantity");
 
-                // (اختياري) تحقق من المخزون
                 if (stock <= 0) {
                     new Alert(Alert.AlertType.WARNING, "Out of stock").showAndWait();
                     return;
                 }
 
-                // إذا موجود بالسلة زيد الكمية
                 for (CartItem it : items) {
                     if (it.prodId == prodId) {
                         it.qty++;
                         cartCount++;
-                        if (cartLabel != null) cartLabel.setText("🛒 Cart (" + cartCount + ")");
+                        refreshCartLabelFromState();
                         return;
                     }
                 }
 
-                // إذا مش موجود ضيف جديد
                 items.add(new CartItem(prodId, model, price, 1));
                 cartCount++;
-                if (cartLabel != null) cartLabel.setText("🛒 Cart (" + cartCount + ")");
-
+                refreshCartLabelFromState();
             }
 
         } catch (Exception ex) {
@@ -242,8 +230,6 @@ public class MainScene implements EventHandler<ActionEvent> {
             new Alert(Alert.AlertType.ERROR, "Add failed: " + ex.getMessage()).showAndWait();
         }
     }
-
-
 
     private VBox createHeroSection() {
         VBox hero = new VBox(20);
@@ -290,21 +276,92 @@ public class MainScene implements EventHandler<ActionEvent> {
         searchBar.getChildren().addAll(searchField, searchBtn);
         hero.getChildren().addAll(title, subtitle, searchBar);
 
+        searchField.setOnKeyReleased(event -> {
+            String search = searchField.getText();
+            if (search.isEmpty()) {
+                mainContent.getChildren().clear();
+                mainContent.getChildren().addAll(createHeroSection(),createCategoriesSection(),createProductsSection());
+                searchField.requestFocus();
+                searchField.positionCaret(0);
+            }else{
+                loadProductsStartWith(search);
+            }
+
+        });
+
+
+
         return hero;
     }
+    private void loadProductsStartWith(String search) {
 
-    // ✅ IMPORTANT: load images from disk first, then resources fallback
+        GridPane productsGrid = new GridPane();
+        productsGrid.setHgap(20);
+        productsGrid.setVgap(20);
+        productsGrid.setAlignment(Pos.CENTER);
+
+        String sql =
+                "SELECT p.ProdID, p.ProdModel, p.Price, p.Description, p.ImagePath, p.Rate " +
+                        "FROM Product p " +
+                        "JOIN Category c ON c.CatgID = p.CatgID " +
+                        "WHERE c.isActive='ACTIVE' " +
+                        "AND p.ProdModel LIKE ?";
+
+        int col = 0, row = 0;
+
+        try (Connection conn = m.m.conn.connectDB();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ps.setString(1, search + "%"); // ⭐ START WITH
+
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+
+                    int prodId = rs.getInt("ProdID");
+                    String model = rs.getString("ProdModel");
+                    double price = rs.getDouble("Price");
+                    String desc = rs.getString("Description");
+                    String img = rs.getString("ImagePath");
+                    int rate = rs.getInt("Rate");
+
+                    VBox card = createProductCard(prodId, model, desc, price, img, rate);
+                    productsGrid.add(card, col, row);
+
+                    col++;
+                    if (col == 3) {
+                        col = 0;
+                        row++;
+                    }
+                }
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        ScrollPane sp = new ScrollPane(productsGrid);
+        sp.setFitToWidth(true);
+        sp.setStyle("-fx-background: transparent; -fx-background-color: transparent;");
+
+        mainContent.getChildren().clear();
+        mainContent.getChildren().addAll(createHeroSection(),sp);
+        searchField.setText(search);
+        searchField.requestFocus();
+        searchField.positionCaret(searchField.getText().length());
+
+    }
+
+
+    // load images from disk first, then resources fallback
     private String resolveImageUrl(String imgPath) {
         if (imgPath == null) return null;
 
         String p = imgPath.trim().replace("\\", "/");
         if (p.isEmpty()) return null;
 
-        // 1) disk
         File f = new File(p);
         if (f.exists()) return f.toURI().toString();
 
-        // 2) resources fallback
         var res = getClass().getResource(p.startsWith("/") ? p : "/" + p);
         if (res != null) return res.toExternalForm();
 
@@ -327,9 +384,11 @@ public class MainScene implements EventHandler<ActionEvent> {
         String isActive = "ACTIVE";
 
         try (Connection conn = m.m.conn.connectDB();
-             PreparedStatement ps = conn.prepareStatement(sql);) {
-            ps.setString(1,isActive);
-            try(ResultSet rs = ps.executeQuery();){
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ps.setString(1, isActive);
+
+            try (ResultSet rs = ps.executeQuery()) {
                 int col = 0;
                 int row = 0;
 
@@ -350,18 +409,18 @@ public class MainScene implements EventHandler<ActionEvent> {
                     iv.setPreserveRatio(true);
 
                     VBox categoryCard = createCategoryCard(iv, name);
-                    ProductHandler ph=new ProductHandler(this,Integer.valueOf(id),name);
+                    ProductHandler ph = new ProductHandler(this, Integer.parseInt(id), name);
                     categoryCard.setOnMouseClicked(ph);
+
                     categories.add(categoryCard, col, row);
                     row++;
-                    if (row == 2) { // 3 columns
+                    if (row == 2) {
                         row = 0;
                         col++;
                     }
                 }
-            }catch (Exception e) {
-                e.printStackTrace();
             }
+
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -412,6 +471,7 @@ public class MainScene implements EventHandler<ActionEvent> {
 
         return card;
     }
+
     private VBox createProductsSection() {
         VBox section = new VBox(20);
 
@@ -424,11 +484,16 @@ public class MainScene implements EventHandler<ActionEvent> {
         productsGrid.setVgap(20);
         productsGrid.setAlignment(Pos.CENTER);
 
-        String sql = "SELECT ProdModel, Price, p.Description, p.ImagePath, Rate FROM Product p join Category c WHERE Rate = 5 AND c.CatgId = p.CatgID AND c.isActive='ACTIVE' ";
+        // ✅ FIX JOIN syntax (حتى لو مش طلبك، بس كان غلط وبيكسر)
+        String sql =
+                "SELECT p.ProdID, p.ProdModel, p.Price, p.Description, p.ImagePath, p.Rate " +
+                        "FROM Product p " +
+                        "JOIN Category c ON c.CatgId = p.CatgID " +
+                        "WHERE p.Rate = 5 AND c.isActive='ACTIVE'";
 
         int col = 0, row = 0;
 
-        try (Connection conn = m.m.conn.connectDB();   // ✅ لاحظ: غالبًا الصح m.conn مش m.m.conn
+        try (Connection conn = m.m.conn.connectDB();
              PreparedStatement ps = conn.prepareStatement(sql);
              ResultSet rs = ps.executeQuery()) {
 
@@ -437,13 +502,14 @@ public class MainScene implements EventHandler<ActionEvent> {
             while (rs.next()) {
                 hasAny = true;
 
+                int prodId = rs.getInt("ProdID");
                 String model = rs.getString("ProdModel");
                 double price = rs.getDouble("Price");
-                String desc  = rs.getString("Description") ;
-                String img   = rs.getString("ImagePath") ;
-                int rate     = rs.getInt("Rate");
+                String desc = rs.getString("Description");
+                String img = rs.getString("ImagePath");
+                int rate = rs.getInt("Rate");
 
-                VBox productCard = createProductCard(model, desc, price, img, rate);
+                VBox productCard = createProductCard(prodId, model, desc, price, img, rate);
                 productsGrid.add(productCard, col, row);
 
                 col++;
@@ -469,9 +535,7 @@ public class MainScene implements EventHandler<ActionEvent> {
         return section;
     }
 
-
-
-    private VBox createProductCard(String name, String desc, double price, String imgPath, int rate) {
+    private VBox createProductCard(int prodId, String name, String desc, double price, String imgPath, int rate) {
 
         VBox card = new VBox(10);
         card.setPadding(new Insets(16));
@@ -484,7 +548,6 @@ public class MainScene implements EventHandler<ActionEvent> {
                         "-fx-border-radius: 16;"
         );
 
-        // ===== Image =====
         ImageView iv = new ImageView();
         iv.setFitWidth(260);
         iv.setFitHeight(160);
@@ -506,13 +569,11 @@ public class MainScene implements EventHandler<ActionEvent> {
                         "-fx-border-radius: 12;"
         );
 
-        // ===== Text =====
         Label nameLabel = new Label(name);
         nameLabel.setTextFill(Color.web("#4ade80"));
         nameLabel.setFont(Font.font("System", FontWeight.BOLD, 16));
         nameLabel.setWrapText(true);
 
-        // ⭐ Rate
         int r = Math.max(0, Math.min(5, rate));
         Label rateLabel = new Label("⭐".repeat(r) + "  (" + r + "/5)");
         rateLabel.setTextFill(Color.web("#a3e635"));
@@ -540,17 +601,16 @@ public class MainScene implements EventHandler<ActionEvent> {
                         "-fx-cursor: hand;"
         );
 
-        addBtn.setOnAction(e -> {
-            // لو بدك add to cart هون لازم يكون عندك prodId
-            // حاليا مجرد شكل
-        });
+        // ✅ الآن صار فعلاً يضيف
+        addBtn.setOnAction(e -> addToCart(prodId));
 
         card.getChildren().addAll(imgBox, nameLabel, rateLabel, priceLabel, descLabel, addBtn);
         return card;
     }
+
     private VBox buildCartView() {
-        totalLbl=new Label();
-        totalLbl.setText("Total = "+String.valueOf(refreshTotale()));
+        totalLbl = new Label();
+        totalLbl.setText("Total = " + refreshTotale());
 
         VBox box = new VBox(15);
         box.setPadding(new Insets(20));
@@ -561,7 +621,9 @@ public class MainScene implements EventHandler<ActionEvent> {
         title.setTextFill(Color.web("#4ade80"));
 
         TableView<CartItem> table = new TableView<>();
-        table.getStylesheets().add(getClass().getResource("/TableCSS.css").toExternalForm());
+        if (getClass().getResource("/TableCSS.css") != null) {
+            table.getStylesheets().add(getClass().getResource("/TableCSS.css").toExternalForm());
+        }
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
         table.setStyle("-fx-background-color: rgba(10, 14, 10, 0.7); -fx-background-radius: 12;");
 
@@ -578,9 +640,7 @@ public class MainScene implements EventHandler<ActionEvent> {
         colQty.setCellValueFactory(new PropertyValueFactory<>("qty"));
 
         TableColumn<CartItem, Double> colSub = new TableColumn<>("Subtotal");
-        colSub.setCellValueFactory(c ->
-                new javafx.beans.property.SimpleDoubleProperty(c.getValue().subtotal()).asObject()
-        );
+        colSub.setCellValueFactory(c -> new SimpleDoubleProperty(c.getValue().subtotal()).asObject());
 
         TableColumn<CartItem, Void> colAct = new TableColumn<>("Action");
         colAct.setCellFactory(tc -> new TableCell<>() {
@@ -601,7 +661,7 @@ public class MainScene implements EventHandler<ActionEvent> {
                     it.qty++;
                     cartCount++;
                     refreshCartLabelFromState();
-                    totalLbl.setText("Total = "+String.valueOf(refreshTotale()));
+                    totalLbl.setText("Total = " + refreshTotale());
                     getTableView().refresh();
                 });
 
@@ -615,7 +675,7 @@ public class MainScene implements EventHandler<ActionEvent> {
                         getTableView().getItems().remove(it);
                     }
                     refreshCartLabelFromState();
-                    totalLbl.setText("Total = "+String.valueOf(refreshTotale()));
+                    totalLbl.setText("Total = " + refreshTotale());
                     getTableView().refresh();
                 });
 
@@ -627,18 +687,16 @@ public class MainScene implements EventHandler<ActionEvent> {
                     getTableView().getItems().remove(it);
 
                     refreshCartLabelFromState();
-                    totalLbl.setText("Total = "+String.valueOf(refreshTotale()));
+                    totalLbl.setText("Total = " + refreshTotale());
                     getTableView().refresh();
                 });
-
-
             }
+
             @Override
             protected void updateItem(Void item, boolean empty) {
                 super.updateItem(item, empty);
                 setGraphic(empty ? null : hb);
             }
-
         });
 
         table.getColumns().addAll(colModel, colPrice, colQty, colSub, colAct);
@@ -652,8 +710,8 @@ public class MainScene implements EventHandler<ActionEvent> {
 
         Button btnCheckout = new Button("✅ Checkout");
         btnCheckout.setStyle("-fx-background-color:#22c55e;-fx-text-fill:white;-fx-font-weight:bold;-fx-background-radius:10;");
-        btnCheckout.setOnAction(e -> {
 
+        btnCheckout.setOnAction(e -> {
             if (custId <= 0) {
                 new Alert(Alert.AlertType.ERROR, "Login as customer first").showAndWait();
                 return;
@@ -665,15 +723,20 @@ public class MainScene implements EventHandler<ActionEvent> {
 
             String updStock = "UPDATE Product SET Quantity = Quantity - ? WHERE ProdID = ? AND Quantity >= ?";
             String insertBill = "INSERT INTO Bill(BillDate, CustID, TotalAmount) VALUES (?,?,?)";
+
+            // ✅ FIX: NO Items column هنا
             String insertOrder =
-                    "INSERT INTO Orders(BillID, ProdID, OrderDate, Quantity, UnitPrice, Status ,Items) " +
-                            "VALUES (?, ?, ?, ?, ?, TRUE,?)";
+                    "INSERT INTO Orders(BillID, ProdID, OrderDate, Quantity, UnitPrice, Status) " +
+                            "VALUES (?, ?, ?, ?, ?, TRUE)";
 
             double total = refreshTotale();
 
             try (Connection conn = m.m.conn.connectDB()) {
                 conn.setAutoCommit(false);
+
                 int billId;
+
+                // 1) Insert Bill
                 try (PreparedStatement ps = conn.prepareStatement(insertBill, PreparedStatement.RETURN_GENERATED_KEYS)) {
                     ps.setTimestamp(1, java.sql.Timestamp.valueOf(java.time.LocalDateTime.now()));
                     ps.setInt(2, custId);
@@ -690,7 +753,7 @@ public class MainScene implements EventHandler<ActionEvent> {
                     }
                 }
 
-                // 2) UPDATE STOCK + INSERT ORDERS
+                // 2) Update stock + Insert Orders (NO Items / NO Model stored)
                 try (PreparedStatement psStock = conn.prepareStatement(updStock);
                      PreparedStatement psOrder = conn.prepareStatement(insertOrder)) {
 
@@ -701,6 +764,7 @@ public class MainScene implements EventHandler<ActionEvent> {
                         psStock.setInt(1, i.getQty());
                         psStock.setInt(2, i.getProdId());
                         psStock.setInt(3, i.getQty());
+
                         int affected = psStock.executeUpdate();
                         if (affected == 0) {
                             conn.rollback();
@@ -709,14 +773,11 @@ public class MainScene implements EventHandler<ActionEvent> {
                             return;
                         }
 
-
-                        // insert order
                         psOrder.setInt(1, billId);
                         psOrder.setInt(2, i.getProdId());
                         psOrder.setTimestamp(3, nowTs);
-                        psOrder.setInt(4, i.getQty());          // ✅ FIX (INT)
+                        psOrder.setInt(4, i.getQty());
                         psOrder.setDouble(5, i.getUnitPrice());
-                        psOrder.setString(6, i.getModel());
                         psOrder.executeUpdate();
                     }
                 }
@@ -738,7 +799,6 @@ public class MainScene implements EventHandler<ActionEvent> {
             }
         });
 
-
         HBox bottom = new HBox(15, btnBack, totalLbl, btnCheckout);
         bottom.setAlignment(Pos.CENTER_RIGHT);
 
@@ -747,8 +807,8 @@ public class MainScene implements EventHandler<ActionEvent> {
     }
 
     public double refreshTotale() {
-        double sum=0;
-        for (CartItem it : items) sum+=it.subtotal();
+        double sum = 0;
+        for (CartItem it : items) sum += it.subtotal();
         return sum;
     }
 
@@ -763,7 +823,9 @@ public class MainScene implements EventHandler<ActionEvent> {
 
         try (Connection conn = m.m.conn.connectDB();
              PreparedStatement ps = conn.prepareStatement(sql)) {
+
             ps.setInt(1, activeBillId);
+
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     data.add(new CartRow(
@@ -784,7 +846,7 @@ public class MainScene implements EventHandler<ActionEvent> {
     private void refreshCartTable(TableView<CartRow> table) {
         table.setItems(loadCartRows());
         this.cartCount = fetchCartCount();
-        if (cartLabel != null) cartLabel.setText("🛒 Cart (" + cartCount + ")");
+        refreshCartLabelFromState();
     }
 
     private int fetchCartCount() {
@@ -802,97 +864,6 @@ public class MainScene implements EventHandler<ActionEvent> {
         return 0;
     }
 
-    private double fetchBillTotal() {
-        if (activeBillId == -1) return 0.0;
-        String sql = "SELECT TotalAmount FROM Bill WHERE BillID=? LIMIT 1";
-        try (Connection conn = m.m.conn.connectDB();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setInt(1, activeBillId);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) return rs.getDouble("TotalAmount");
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        return 0.0;
-    }
-
-    private void updateCartQty(int orderId, int prodId, int newQty) {
-        String upd = "UPDATE Orders SET Quantity=? WHERE OrderID=?";
-        String updBill =
-                "UPDATE Bill SET TotalAmount=(" +
-                        "SELECT IFNULL(SUM(Quantity*UnitPrice),0) FROM Orders WHERE BillID=? AND Status=TRUE) " +
-                        "WHERE BillID=?";
-
-        try (Connection conn = m.m.conn.connectDB()) {
-            conn.setAutoCommit(false);
-
-            try (PreparedStatement ps = conn.prepareStatement(upd)) {
-                ps.setInt(1, newQty);
-                ps.setInt(2, orderId);
-                ps.executeUpdate();
-            }
-
-            try (PreparedStatement ps = conn.prepareStatement(updBill)) {
-                ps.setInt(1, activeBillId);
-                ps.setInt(2, activeBillId);
-                ps.executeUpdate();
-            }
-
-            conn.commit();
-            conn.setAutoCommit(true);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    private void removeFromCart(int orderId) {
-        String sql = "UPDATE Orders SET Status=FALSE WHERE OrderID=?";
-        String updBill =
-                "UPDATE Bill SET TotalAmount=(" +
-                        "SELECT IFNULL(SUM(Quantity*UnitPrice),0) FROM Orders WHERE BillID=? AND Status=TRUE) " +
-                        "WHERE BillID=?";
-
-        try (Connection conn = m.m.conn.connectDB()) {
-            conn.setAutoCommit(false);
-
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setInt(1, orderId);
-                ps.executeUpdate();
-            }
-
-            try (PreparedStatement ps = conn.prepareStatement(updBill)) {
-                ps.setInt(1, activeBillId);
-                ps.setInt(2, activeBillId);
-                ps.executeUpdate();
-            }
-
-            conn.commit();
-            conn.setAutoCommit(true);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    private void checkoutCart() {
-        if (activeBillId == -1) return;
-
-        // Checkout: خلّي كل عناصر السلة Status=FALSE (يعني خلصت)
-        String sql = "UPDATE Orders SET Status=FALSE WHERE BillID=? AND Status=TRUE";
-        try (Connection conn = m.m.conn.connectDB();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setInt(1, activeBillId);
-            ps.executeUpdate();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-
-        // خلّي السلة الجديدة تبدأ بفاتورة جديدة
-        activeBillId = -1;
-        this.cartCount = 0;
-        if (cartLabel != null) cartLabel.setText("🛒 Cart (0)");
-    }
-
     private void openCart() {
         if (custId <= 0) {
             new Alert(Alert.AlertType.ERROR, "Login as Customer first.").showAndWait();
@@ -907,6 +878,7 @@ public class MainScene implements EventHandler<ActionEvent> {
         root.setCenter(sp);
     }
 
+    // ======================= INNER CLASSES =======================
 
     public static class CartRow {
         private final int orderId;
@@ -929,9 +901,9 @@ public class MainScene implements EventHandler<ActionEvent> {
         public int getQuantity() { return quantity; }
         public double getUnitPrice() { return unitPrice; }
         public double getSubtotal() { return unitPrice * quantity; }
-
         public void setQuantity(int q) { this.quantity = q; }
     }
+
     public static class CartItem {
         int prodId;
         String model;
@@ -945,24 +917,10 @@ public class MainScene implements EventHandler<ActionEvent> {
             this.qty = qty;
         }
 
-        public int getProdId() {
-            return prodId;
-        }
-
-        public String getModel() {
-            return model;
-        }
-
-        public int getQty() {
-            return qty;
-        }
-
-        public double getUnitPrice() {
-            return unitPrice;
-        }
-
+        public int getProdId() { return prodId; }
+        public String getModel() { return model; }
+        public int getQty() { return qty; }
+        public double getUnitPrice() { return unitPrice; }
         public double subtotal() { return unitPrice * qty; }
     }
-
-
 }

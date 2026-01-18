@@ -61,6 +61,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
     HBox btnRow;
 
     // Users fields
+    Label salaryLabel;
     private TextField tfUserID_U, tfUserName_U, tfphone, tfEmail_U, tfUserNameLogin_U ,tfSalary ;
     private PasswordField pfPass_U;
     private ComboBox<String> cbRole_U, cbStatus_U, cbGender_U,cbIsActive;
@@ -583,27 +584,44 @@ public class EmployeScene implements EventHandler<ActionEvent> {
 
         Utable.getSelectionModel().selectedItemProperty().addListener((obs, old, row) -> {
             if (row == null) return;
+
             tfUserID_U.setText(String.valueOf(row.getUserID()));
             tfUserNameLogin_U.setText(row.getUserName());
             pfPass_U.setText(row.getPass());
             cbRole_U.setValue(row.getRole());
             cbStatus_U.setValue(row.getStatus());
             tfEmail_U.setText(row.getEmail() == null ? "" : row.getEmail());
-            if(cbRole_U.getValue().equals("Admin") || cbRole_U.getValue().equals("EMP")){
-                String sql= "SELECT * FROM Users u JOIN Employee e ON e.EmpID = u.PersonID WHERE u.UserID = ?";
+
+            // ✅ Show salary فقط لو EMP
+            if ("EMP".equalsIgnoreCase(row.getRole())) {
+                salaryLabel.setVisible(true);
+                tfSalary.setVisible(true);
+
+                String sql = "SELECT e.Salary " +
+                        "FROM Users u JOIN Employee e ON e.EmpID = u.PersonID " +
+                        "WHERE u.UserID = ?";
+
                 try (Connection conn = s.m.conn.connectDB();
-                     PreparedStatement ps = conn.prepareStatement(sql);) {
+                     PreparedStatement ps = conn.prepareStatement(sql)) {
+
                     ps.setInt(1, row.getUserID());
-                    ResultSet rs = ps.executeQuery();
-                    double salary=rs.getDouble("Salary");
-                    card.getChildren().addAll(t, tfUserID_U, tfUserName_U, tfphone, cbGender_U, tfUserNameLogin_U, tfEmail_U, pfPass_U, cbRole_U, cbStatus_U, btnRow );
-                } catch (SQLException e) {
-                    throw new RuntimeException(e);
-                } catch (ClassNotFoundException e) {
-                    throw new RuntimeException(e);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            tfSalary.setText(String.valueOf(rs.getDouble("Salary")));
+                        } else {
+                            tfSalary.setText(""); // لو ما في employee row
+                        }
+                    }
+
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                    tfSalary.setText("");
                 }
 
-
+            } else {
+                salaryLabel.setVisible(false);
+                tfSalary.setVisible(false);
+                tfSalary.setText("");
             }
         });
 
@@ -693,8 +711,12 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         clearBtn.setOnAction(e -> clearUserForm());
 
         btnRow.getChildren().addAll(addBtn, updateBtn, clearBtn ,deleteUser);
-
-        card.getChildren().addAll(t, tfUserID_U, tfUserName_U, tfphone, cbGender_U, tfUserNameLogin_U, tfEmail_U, pfPass_U, cbRole_U, cbStatus_U, btnRow );
+        HBox h=new HBox(10);
+        salaryLabel=new Label("Salary ");
+        salaryLabel.setVisible(false);
+        tfSalary.setVisible(false);
+        h.getChildren().addAll( cbRole_U, salaryLabel , tfSalary);
+        card.getChildren().addAll(t, tfUserID_U, tfUserName_U, tfphone, cbGender_U, tfUserNameLogin_U, tfEmail_U, pfPass_U, h, cbStatus_U, btnRow );
 
         TranslateTransition tt = new TranslateTransition(Duration.millis(400), card);
         tt.setFromY(18);
@@ -704,6 +726,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         return card;
     }
     private void deleteUser() {
+
         Integer userId = parseInt(tfUserID_U.getText());
         if (userId == null) {
             setMsg("Select User ❗", true);
@@ -711,7 +734,9 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         }
 
         Alert confirm = new Alert(Alert.AlertType.CONFIRMATION,
-                "Delete this user permanently?\n(This will remove Person + User + Employee/Customer rows if exist)",
+                "Delete user?\n" +
+                        "• If Customer has Bills -> will Deactivate (cannot delete).\n" +
+                        "• Otherwise -> will delete permanently (Person + User + Role row).",
                 ButtonType.YES, ButtonType.NO);
         confirm.showAndWait();
         if (confirm.getResult() != ButtonType.YES) return;
@@ -721,12 +746,19 @@ public class EmployeScene implements EventHandler<ActionEvent> {
             conn = s.m.conn.connectDB();
             conn.setAutoCommit(false);
 
-            // 1) get PersonID
+            // 1) get PersonID + Role
             Integer personId = null;
-            try (PreparedStatement ps = conn.prepareStatement("SELECT PersonID FROM Users WHERE UserID=?")) {
+            String role = null;
+
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "SELECT PersonID, Role FROM Users WHERE UserID=?"
+            )) {
                 ps.setInt(1, userId);
                 try (ResultSet rs = ps.executeQuery()) {
-                    if (rs.next()) personId = rs.getInt(1);
+                    if (rs.next()) {
+                        personId = rs.getInt("PersonID");
+                        role = rs.getString("Role");
+                    }
                 }
             }
 
@@ -736,26 +768,56 @@ public class EmployeScene implements EventHandler<ActionEvent> {
                 return;
             }
 
-            // 2) delete role rows first (safe)
-            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM Employee WHERE EmpID=?")) {
-                ps.setInt(1, personId);
-                ps.executeUpdate();
-            }
-            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM Customer WHERE CustID=?")) {
-                ps.setInt(1, personId);
-                ps.executeUpdate();
+            // 2) block ADMIN
+            if ("ADMIN".equalsIgnoreCase(role)) {
+                setMsg("Can't delete ADMIN ❗", true);
+                conn.rollback();
+                return;
             }
 
-            // 3) delete from Users
-            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM Users WHERE UserID=?")) {
-                ps.setInt(1, userId);
-                ps.executeUpdate();
+            // 3) If CUST -> check bills
+            if ("CUST".equalsIgnoreCase(role)) {
+                int billsCount = 0;
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "SELECT COUNT(*) FROM Bill WHERE CustID=?"
+                )) {
+                    ps.setInt(1, personId); // CustID == PersonID
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) billsCount = rs.getInt(1);
+                    }
+                }
+
+                // has bills -> deactivate instead of delete
+                if (billsCount > 0) {
+                    try (PreparedStatement ps = conn.prepareStatement(
+                            "UPDATE Users SET ActiveStatus=FALSE WHERE UserID=?"
+                    )) {
+                        ps.setInt(1, userId);
+                        ps.executeUpdate();
+                    }
+
+                    conn.commit();
+                    setMsg("Customer has bills → Deactivated ✅", false);
+                    loadUsers();
+                    clearUserForm();
+                    return;
+                }
             }
 
-            // 4) delete from Person
-            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM Person WHERE PersonID=?")) {
+            // 4) delete Person فقط ✅ (رح يعمل cascade على Users + Employee/Customer)
+            // Users(PersonID) ON DELETE CASCADE
+            // Employee(EmpID->PersonID) ON DELETE CASCADE
+            // Customer(CustID->PersonID) ON DELETE CASCADE
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "DELETE FROM Person WHERE PersonID=?"
+            )) {
                 ps.setInt(1, personId);
-                ps.executeUpdate();
+                int d = ps.executeUpdate();
+                if (d == 0) {
+                    setMsg("Person not found ❗", true);
+                    conn.rollback();
+                    return;
+                }
             }
 
             conn.commit();
@@ -883,7 +945,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
     }
 
     private void updateUser() {
-        Integer id = parseInt(tfUserID_U.getText());
+        Integer id = parseInt(tfUserID_U.getText()); // UserID
         String userNameLogin = tfUserNameLogin_U.getText().trim();
         String pass = pfPass_U.getText().trim();
         String role = cbRole_U.getValue();
@@ -896,29 +958,103 @@ public class EmployeScene implements EventHandler<ActionEvent> {
             return;
         }
 
-        String sql = "UPDATE Users SET UserName=?, Password=?, Role=?, ActiveStatus=?, Email=? WHERE UserID=?";
+        Connection conn = null;
+        try {
+            conn = s.m.conn.connectDB();
+            conn.setAutoCommit(false);
 
-        try (Connection conn = s.m.conn.connectDB();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
+            // 1) Update Users
+            String sqlUser = "UPDATE Users SET UserName=?, Password=?, Role=?, ActiveStatus=?, Email=? WHERE UserID=?";
+            try (PreparedStatement ps = conn.prepareStatement(sqlUser)) {
 
-            ps.setString(1, userNameLogin);
-            ps.setString(2, pass.isEmpty() ? null : pass);
-            ps.setString(3, role);
-            ps.setBoolean(4, active);
-            ps.setString(5, email.isEmpty() ? null : email);
-            ps.setInt(6, id);
+                ps.setString(1, userNameLogin);
+                ps.setString(2, pass.isEmpty() ? null : pass);
+                ps.setString(3, role);
+                ps.setBoolean(4, active);
+                ps.setString(5, email.isEmpty() ? null : email);
+                ps.setInt(6, id);
 
-            int updated = ps.executeUpdate();
-            if (updated == 0) setMsg("User not found ❗", true);
-            else setMsg("User updated ✅", false);
+                int updated = ps.executeUpdate();
+                if (updated == 0) {
+                    conn.rollback();
+                    setMsg("User not found ❗", true);
+                    return;
+                }
+            }
+
+            // 2) If EMP -> update salary in Employee table
+            if ("EMP".equalsIgnoreCase(role)) {
+
+                // لازم نجيب PersonID عشان Employee.EmpID = Users.PersonID
+                Integer personId = null;
+                try (PreparedStatement ps = conn.prepareStatement("SELECT PersonID FROM Users WHERE UserID=?")) {
+                    ps.setInt(1, id);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) personId = rs.getInt(1);
+                    }
+                }
+
+                if (personId == null) {
+                    conn.rollback();
+                    setMsg("User person not found ❗", true);
+                    return;
+                }
+
+                Double salary = parseDouble(tfSalary.getText());
+                if (salary == null) {
+                    conn.rollback();
+                    setMsg("Enter valid salary ❗", true);
+                    return;
+                }
+
+                // إذا ما كان عنده row بجدول Employee (احتياط)
+                int exists = 0;
+                try (PreparedStatement ps = conn.prepareStatement("SELECT COUNT(*) FROM Employee WHERE EmpID=?")) {
+                    ps.setInt(1, personId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        rs.next();
+                        exists = rs.getInt(1);
+                    }
+                }
+
+                if (exists == 0) {
+                    // create row if missing
+                    try (PreparedStatement ps = conn.prepareStatement(
+                            "INSERT INTO Employee(EmpID, Salary, Address) VALUES (?, ?, NULL)"
+                    )) {
+                        ps.setInt(1, personId);
+                        ps.setDouble(2, salary);
+                        ps.executeUpdate();
+                    }
+                } else {
+                    // update salary
+                    try (PreparedStatement ps = conn.prepareStatement(
+                            "UPDATE Employee SET Salary=? WHERE EmpID=?"
+                    )) {
+                        ps.setDouble(1, salary);
+                        ps.setInt(2, personId);
+                        ps.executeUpdate();
+                    }
+                }
+            }
+
+            conn.commit();
+            setMsg("User updated ✅", false);
 
         } catch (SQLIntegrityConstraintViolationException e) {
+            try { if (conn != null) conn.rollback(); } catch (Exception ignore) {}
             setMsg("Duplicate (username/email) ❗", true);
+
         } catch (Exception e) {
+            try { if (conn != null) conn.rollback(); } catch (Exception ignore) {}
             e.printStackTrace();
             setMsg("Update failed: " + e.getMessage(), true);
+
+        } finally {
+            try { if (conn != null) conn.close(); } catch (Exception ignore) {}
         }
     }
+
 
     private void clearUserForm() {
         tfUserID_U.clear();
@@ -1016,7 +1152,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
             tfCatgName_C.setText(row.getCatgName());
             taCatgDesc_C.setText(row.getDescription() );
             tfCatgImagePath_C.setText(row.getImagePath() );
-            cbIsActive.setPromptText(row.getIsActive());
+            cbIsActive.setValue(row.getIsActive());
         });
 
         actionCol.setCellFactory(col -> new TableCell<>() {
@@ -1057,6 +1193,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         t.setTextFill(Color.web("#a3e635"));
 
         tfCatgID_C = styledTF("Category ID");
+        tfCatgID_C.setEditable(false);
         tfCatgName_C = styledTF("Category Name");
 
         taCatgDesc_C = new TextArea();
@@ -1101,13 +1238,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         btnRow.getChildren().addAll(addBtn, updateBtn, clearBtn);
 
         card.getChildren().addAll(
-                t,
-                tfCatgID_C,
-                tfCatgName_C,
-                taCatgDesc_C,
-                cbIsActive,
-                tfCatgImagePath_C, chooseCatgImg,
-                btnRow
+                t,tfCatgName_C,taCatgDesc_C,cbIsActive, tfCatgImagePath_C, chooseCatgImg,btnRow
         );
 
         return card;
@@ -1254,11 +1385,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         tt.play();
 
         card.getChildren().addAll(
-                t,
-                tfProdID, tfModel, tfPrice, tfQty, tfCatgID, tfInvID,tfRate,
-                taDesc,
-                tfProdImagePath, chooseProdImg,
-                btnRow
+                t, tfModel, tfPrice, tfQty, tfCatgID, tfInvID,tfRate,taDesc,tfProdImagePath, chooseProdImg, btnRow
         );
 
         return card;
@@ -1359,10 +1486,10 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         Integer id = parseInt(tfCatgID_C.getText());
         String name = tfCatgName_C.getText().trim();
         String desc = taCatgDesc_C.getText().trim();
-        String isActive=cbIsActive.getValue().trim();
+        String isActive=cbIsActive.getValue();
 
-        if (id == null || name.isEmpty()) {
-            setMsg("Category ID & Name required ❗", true);
+        if ( name.isEmpty()) {
+            setMsg("Category Name required ❗", true);
             return;
         }
 
@@ -1371,16 +1498,15 @@ public class EmployeScene implements EventHandler<ActionEvent> {
             String savedPath = copyToProjectImages(tfCatgImagePath_C.getText());
             tfCatgImagePath_C.setText(savedPath == null ? "" : savedPath);
 
-            String sql = "INSERT INTO Category (CatgID, CatgName, Description, ImagePath ,isActive) VALUES (?, ?, ?, ?,?)";
+            String sql = "INSERT INTO Category ( CatgName, Description, ImagePath ,isActive) VALUES ( ?, ?, ?,?)";
 
             try (Connection conn = s.m.conn.connectDB();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
 
-                ps.setInt(1, id);
-                ps.setString(2, name);
-                ps.setString(3, desc.isEmpty() ? null : desc);
-                ps.setString(4, savedPath);
-                ps.setBoolean(5, isActive.isEmpty());
+                ps.setString(1, name);
+                ps.setString(2, desc.isEmpty() ? null : desc);
+                ps.setString(3, savedPath);
+                ps.setString(4, isActive);
 
                 ps.executeUpdate();
                 setMsg("Category added ✅", false);
@@ -1401,7 +1527,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         Integer id = parseInt(tfCatgID_C.getText());
         String name = tfCatgName_C.getText().trim();
         String desc = taCatgDesc_C.getText().trim();
-        String isActive= cbIsActive.getValue().trim();
+        String isActive= cbIsActive.getValue();
 
 
         if (id == null || name.isEmpty()) {
@@ -1833,6 +1959,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
             this.catgName = catgName;
             this.description = description;
             this.imagePath = imagePath;
+            this.isActive = isActive;
         }
 
         public int getCatgID() { return catgID; }
@@ -1852,8 +1979,18 @@ public class EmployeScene implements EventHandler<ActionEvent> {
         private String role;
         private String status;
         private String email;
+        private double salary;
+
 
         public UserRow(int userID, String userName, String pass, String role, String status, String email) {
+            this.userID = userID;
+            this.userName = userName;
+            this.pass = pass;
+            this.role = role;
+            this.status = status;
+            this.email = email;
+        }
+        public UserRow(int userID, String userName, String pass, String role, String status, String email, double salary) {
             this.userID = userID;
             this.userName = userName;
             this.pass = pass;
@@ -1879,5 +2016,7 @@ public class EmployeScene implements EventHandler<ActionEvent> {
 
         public String getEmail() { return email; }
         public void setEmail(String email) { this.email = email; }
+
+        public double getSalary() { return salary; }
     }
 }

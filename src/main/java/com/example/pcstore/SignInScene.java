@@ -47,6 +47,7 @@ public class SignInScene implements EventHandler<ActionEvent> {
     public int currentCustId = -1;
     public int currentUserId = -1;
     public String currentUserName = "";
+    public String ActiveStatus="";
 
     public SignInScene(Main m) {
         this.m = m;
@@ -234,7 +235,7 @@ public class SignInScene implements EventHandler<ActionEvent> {
 
         suName1 = styledTextField("First Name", false, "👤");
         suName2 = styledTextField("Second Name", false, "👤");
-        suEmail = styledTextField("Username (or email)", false, "📧"); // نخزنه كـ UserName
+        suEmail = styledTextField("Username ", false, "📧"); // نخزنه كـ UserName
         gender  = new ComboBox<>();
         gender.getItems().addAll("Male", "Female");
         gender.setPromptText("Gender" + "  " + "⚧");
@@ -367,7 +368,7 @@ public class SignInScene implements EventHandler<ActionEvent> {
         if (authenticateUser(username, password)) {
             showMessage("Sign in successful!", false);
 
-            if ("CUST".equals(role)) {
+            if ("CUST".equals(role) ) {
                 MainScene ms = new MainScene(this);
                 ms.handle(null);
                 m.root.setCenter(ms.getRoot());
@@ -385,7 +386,9 @@ public class SignInScene implements EventHandler<ActionEvent> {
     }
 
     private boolean authenticateUser(String username, String password) {
-        String sql = "SELECT UserID, PersonID, Password, Role FROM Users WHERE UserName = ? LIMIT 1";
+
+        String sql = "SELECT UserID, PersonID, Password, Role, ActiveStatus " +
+                "FROM Users WHERE UserName = ? LIMIT 1";
 
         try (Connection conn = m.conn.connectDB();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -395,20 +398,34 @@ public class SignInScene implements EventHandler<ActionEvent> {
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) return false;
 
+                // ✅ Check ActiveStatus first
+                boolean active = rs.getBoolean("ActiveStatus");
+                if (!active) {
+                    showMessage("Your account is inactive ❗", true);
+                    return false;
+                }
+
+                String dbPassword = rs.getString("Password");
+                if (dbPassword == null || !dbPassword.equals(password)) {
+                    return false;
+                }
+
+                // ✅ set session info only after success
                 currentUserId = rs.getInt("UserID");
                 currentPersonId = rs.getInt("PersonID");
                 currentUserName = username;
-
-                String dbPassword = rs.getString("Password");
                 role = rs.getString("Role");
 
-                if ("CUST".equals(role)) {
-                    currentCustId = currentPersonId;
+                // if you still want to store it as string:
+                ActiveStatus = "Active";
+
+                if ("CUST".equalsIgnoreCase(role)) {
+                    currentCustId = currentPersonId; // CustID == PersonID
                 } else {
                     currentCustId = -1;
                 }
 
-                return dbPassword != null && dbPassword.equals(password);
+                return true;
             }
 
         } catch (Exception e) {
@@ -423,11 +440,10 @@ public class SignInScene implements EventHandler<ActionEvent> {
         String name2 = suName2.getText().trim();
         String username = suEmail.getText().trim();
         String ph = phone.getText().trim();
-
         String gen = (gender.getValue() == null) ? null : gender.getValue().trim();
-
         String pass = suPassword.getText();
         String conf = suConfirm.getText();
+        String email = username+"@gmail.com";
 
         if (name1.isEmpty() || name2.isEmpty() || username.isEmpty() || pass.isEmpty() || conf.isEmpty()) {
             showMessage("Please fill in all fields", true);
@@ -442,7 +458,7 @@ public class SignInScene implements EventHandler<ActionEvent> {
 
         String check = "SELECT 1 FROM Users WHERE UserName = ? LIMIT 1";
         String insPerson = "INSERT INTO Person(FirstName, SecondName, Gender, Phone) VALUES (?, ?, ?, ?)";
-        String insUser = "INSERT INTO Users(PersonID, UserName, Password, Role, ActiveStatus) VALUES (?, ?, ?, 'CUST', TRUE)";
+        String insUser = "INSERT INTO Users(PersonID, UserName, Password, Role, ActiveStatus, Email) VALUES (?, ?, ?, 'CUST', TRUE,?)";
         String insCust = "INSERT INTO Customer(CustID, LastPurchaseDate) VALUES (?, NULL)";
 
         try (Connection conn = m.conn.connectDB()) {
@@ -489,6 +505,7 @@ public class SignInScene implements EventHandler<ActionEvent> {
                 ps.setInt(1, newPersonId);
                 ps.setString(2, username);
                 ps.setString(3, pass);
+                ps.setString(4, email);
                 ps.executeUpdate();
             }
 
